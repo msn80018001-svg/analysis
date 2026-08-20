@@ -2589,6 +2589,69 @@
   html[data-theme="dark"] .mx-del:hover{background:#0F2E29;color:#63DCC5;border-color:#12B79D;}
   html[data-theme="dark"] .hub-hero{background:linear-gradient(135deg,rgba(53,110,201,.16),rgba(18,183,157,.14));}
 
+  /* ---------- 9.7) صور الأسئلة ونصوص القراءة ---------- */
+  .q-figure{margin:0 0 20px;text-align:center;}
+  .q-figure img{
+    max-width:100%;max-height:46vh;border-radius:16px;border:1px solid var(--line);
+    background:#fff;box-shadow:var(--shadow-soft);cursor:zoom-in;display:inline-block;
+  }
+  html[data-theme="dark"] .q-figure img{background:#0E1826;}
+  .q-figure .fig-hint{font-size:11.5px;color:var(--sub);margin-top:7px;font-weight:700;}
+
+  .img-lightbox{
+    position:fixed;inset:0;z-index:10000;display:grid;place-items:center;
+    background:rgba(6,15,28,.88);padding:24px;cursor:zoom-out;
+  }
+  .img-lightbox img{max-width:96vw;max-height:88vh;border-radius:12px;background:#fff;}
+  .img-lightbox .lb-close{
+    position:absolute;top:18px;inset-inline-end:18px;width:44px;height:44px;border-radius:50%;
+    border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.14);color:#fff;
+    font-size:22px;cursor:pointer;line-height:1;
+  }
+
+  .q-passage{
+    border:1px solid var(--line);border-radius:16px;background:var(--blue-light);
+    margin-bottom:18px;overflow:hidden;
+  }
+  html[data-theme="dark"] .q-passage{background:#132437;border-color:#27384E;}
+  .qp-head{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;
+    padding:11px 15px;font-weight:900;font-size:13.5px;color:var(--blue);
+    background:transparent;border:none;width:100%;cursor:pointer;font-family:inherit;text-align:start;
+  }
+  html[data-theme="dark"] .qp-head{color:#9CC2F5;}
+  .qp-body{
+    padding:0 16px 15px;font-size:clamp(14px,1.5vw,17px);line-height:2.1;
+    color:var(--ink);max-height:38vh;overflow:auto;white-space:pre-wrap;
+  }
+  .q-passage.collapsed .qp-body{display:none;}
+  .qp-head .qp-arrow{transition:transform .2s;}
+  .q-passage.collapsed .qp-head .qp-arrow{transform:rotate(-90deg);}
+
+  .q-missing{
+    display:flex;align-items:flex-start;gap:10px;margin:0 0 18px;
+    padding:13px 15px;border-radius:14px;font-size:13.5px;font-weight:800;line-height:1.85;
+    background:var(--amber-light);color:var(--amber);border:1px solid rgba(185,109,23,.30);
+  }
+  html[data-theme="dark"] .q-missing{background:#3A2B15;color:#F0C070;border-color:rgba(240,192,112,.28);}
+  .btn-skip{background:transparent;border:1px dashed var(--line);color:var(--sub);}
+  .btn-skip:hover{border-color:var(--amber);color:var(--amber);}
+
+  /* أدوات المعلم */
+  .qa-media{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:800;}
+  .qa-media.ok{color:var(--teal);} .qa-media.warn{color:var(--amber);} .qa-media.none{color:var(--sub);}
+  .qa-thumb{width:52px;height:38px;object-fit:cover;border-radius:7px;border:1px solid var(--line);}
+  .qa-filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
+  .upload-box{
+    border:2px dashed var(--line);border-radius:14px;padding:14px;text-align:center;
+    font-size:12.5px;color:var(--sub);font-weight:700;
+  }
+  .upload-preview{max-width:100%;max-height:190px;border-radius:11px;margin-top:10px;border:1px solid var(--line);}
+  .storage-warn{
+    background:var(--red-light);color:var(--red);border:1px solid rgba(195,62,82,.28);
+    border-radius:12px;padding:11px 13px;font-size:12.5px;font-weight:800;line-height:1.8;margin-bottom:12px;
+  }
+
   /* ---------- 10) احترام تفضيل تقليل الحركة ---------- */
   @media (prefers-reduced-motion: reduce){
     .q-card,.q-card.out,.q-opt.correct,.q-opt.wrong,.q-feedback,.rs-stars span,.q-chip.streak.hot{animation:none !important;}
@@ -2868,6 +2931,9 @@ let db = null;
 let collection, doc, getDoc, getDocs, addDoc, setDoc, updateDoc, deleteDoc,
     query, where, orderBy, increment, writeBatch, limit, onSnapshot;
 let reportsUnsub = null;
+/* Firebase Storage — يُحمَّل بشكل منفصل حتى لا تتعطل المنصة إن لم تكن الخدمة مفعّلة */
+let storage = null, sRef, uploadBytes, getDownloadURL, deleteObject;
+let STORAGE_READY = false, STORAGE_ERROR = "";
 
 /* ========================= بيانات أولية (Seed) ========================= */
 const SEED_STUDENTS = [
@@ -13422,6 +13488,127 @@ function nafesAttachKeys(fn){
   document.addEventListener("keydown", nafesKeyHandler);
 }
 
+/* ============================================================================
+   V11 — صور الأسئلة ونصوص القراءة
+   ========================================================================== */
+
+/* عبارات تدل على أن السؤال يعتمد على شكل أو صورة أو جدول غير مكتوب في النص */
+const FIGURE_HINTS = [
+  "الشكل أدناه","الشكل التالي","الشكل الآتي","الشكل المجاور","الشكل السابق","في الشكل","كما في الشكل",
+  "يوضح الشكل","يبين الشكل","يمثل الشكل","حسب الشكل","وفق الشكل","انظر الشكل","الشكل الموضح","بناء على الشكل",
+  "الصورة أدناه","الصورة التالية","الصورة الآتية","الصورة المجاورة","في الصورة","كما في الصورة","الموضحة في الصورة",
+  "الجدول أدناه","الجدول التالي","الجدول الآتي","الجدول المجاور","في الجدول","يوضح الجدول","يبين الجدول",
+  "الرسم أدناه","الرسم التالي","الرسم المجاور","في الرسم","المخطط أدناه","المخطط التالي","المخطط المجاور",
+  "المبين أدناه","الموضح أدناه","الموضحة أدناه","كما هو أدناه","النمط أدناه","الخريطة أدناه",
+];
+function nafesNeedsFigure(text){
+  const t = String(text || "");
+  return FIGURE_HINTS.some(k => t.includes(k));
+}
+
+/* عبارات تدل على أن السؤال يعتمد على نص قرائي */
+const PASSAGE_HINTS = [
+  "اقرأ النص","النص التالي","النص الآتي","النص السابق","النص أعلاه","في النص","من النص","حسب النص","وفق النص",
+  "بحسب النص","في ضوء النص","من خلال النص","ورد في النص","وردت في النص","الفكرة الرئيسة للنص","الغرض من النص",
+  "نوع النص","العنوان المناسب","العنوان الأنسب","اقرأ الفقرة","الفقرة الأولى","الفقرة الأخيرة","في القصة",
+  "بطلا القصة","رأي الكاتب","قال الكاتب","يدعو إليه النص","يدعمها النص","يقدم النص",
+];
+function nafesNeedsPassage(text){
+  const t = String(text || "");
+  return PASSAGE_HINTS.some(k => t.includes(k));
+}
+
+/* هل ينقص هذا السؤال ما يحتاجه ليكون قابلاً للحل؟ */
+function nafesMissingMedia(q){
+  const needsImg = nafesNeedsFigure(q.text) && !q.image;
+  const needsTxt = nafesNeedsPassage(q.text) && !String(q.passage||"").trim();
+  return { needsImg, needsTxt, any: needsImg || needsTxt };
+}
+
+/* ضغط الصورة داخل المتصفح قبل رفعها — يخفّض الحجم ويسرّع التحميل على جوالات الطلاب */
+function nafesCompressImage(file, maxW, quality){
+  maxW = maxW || 1200; quality = quality || 0.82;
+  return new Promise((resolve, reject)=>{
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = ()=>{
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, maxW / img.naturalWidth);
+      const w = Math.round(img.naturalWidth * scale), hgt = Math.round(img.naturalHeight * scale);
+      const cv = document.createElement("canvas");
+      cv.width = w; cv.height = hgt;
+      const ctx = cv.getContext("2d");
+      ctx.fillStyle = "#ffffff"; ctx.fillRect(0,0,w,hgt);   /* خلفية بيضاء لصور PNG الشفافة */
+      ctx.drawImage(img, 0, 0, w, hgt);
+      cv.toBlob(b => b ? resolve(b) : reject(new Error("تعذّر ضغط الصورة")), "image/jpeg", quality);
+    };
+    img.onerror = ()=>{ URL.revokeObjectURL(url); reject(new Error("الملف ليس صورة صالحة")); };
+    img.src = url;
+  });
+}
+
+/* رفع صورة سؤال إلى Firebase Storage وإرجاع رابطها ومسارها */
+async function nafesUploadQuestionImage(file, subject){
+  /* خطة بديلة إن لم تكن خدمة Storage مفعّلة: تخزين الصورة مضغوطة داخل مستند السؤال نفسه.
+     مستند Firestore محدود بميجابايت واحد، لذا نضغط بقوة ونرفض ما يتجاوز ٤٠٠ كيلوبايت. */
+  if (!STORAGE_READY) {
+    const small = await nafesCompressImage(file, 900, 0.68);
+    if (small.size > 400 * 1024) {
+      throw new Error("الصورة كبيرة جداً للتخزين المؤقت داخل قاعدة البيانات. فعّل خدمة Storage، أو اختر صورة أصغر/أوضح.");
+    }
+    const dataUrl = await new Promise((res, rej)=>{
+      const fr = new FileReader();
+      fr.onload = ()=>res(fr.result); fr.onerror = ()=>rej(new Error("تعذّرت قراءة الصورة"));
+      fr.readAsDataURL(small);
+    });
+    return { url: dataUrl, path: "", size: small.size, inline: true };
+  }
+  const blob = await nafesCompressImage(file);
+  const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+  const path = `questions/${subject}/${stamp}.jpg`;
+  const r = sRef(storage, path);
+  await uploadBytes(r, blob, { contentType:"image/jpeg", cacheControl:"public,max-age=31536000" });
+  const url = await getDownloadURL(r);
+  return { url, path, size: blob.size };
+}
+
+/* حذف صورة من التخزين (يُتجاهل الفشل: قد تكون محذوفة أصلاً) */
+async function nafesDeleteImage(path){
+  if (!STORAGE_READY || !path) return;
+  try { await deleteObject(sRef(storage, path)); } catch(e) { /* تجاهل */ }
+}
+
+/* عرض الصورة بحجم كامل عند الضغط عليها */
+function nafesLightbox(src){
+  const close = ()=>{ box.remove(); document.removeEventListener("keydown", onKey); };
+  const onKey = e => { if (e.key === "Escape") close(); };
+  const box = h("div",{class:"img-lightbox", onclick:close}, [
+    h("img",{src, alt:"صورة السؤال بحجم كامل"}),
+    h("button",{class:"lb-close", "aria-label":"إغلاق"},"×"),
+  ]);
+  document.body.appendChild(box);
+  document.addEventListener("keydown", onKey);
+}
+
+/* صندوق نص القراءة القابل للطي */
+function nafesPassageBox(passage, title){
+  const body = h("div",{class:"qp-body"}, passage);
+  const arrow = h("span",{class:"qp-arrow"},"▾");
+  const wrapEl = h("div",{class:"q-passage"});
+  const head = h("button",{class:"qp-head", type:"button", onclick:()=>wrapEl.classList.toggle("collapsed")}, [
+    h("span",{}, `📖 ${title || "نص القراءة"} — اقرأه ثم أجب`),
+    arrow,
+  ]);
+  wrapEl.appendChild(head); wrapEl.appendChild(body);
+  return wrapEl;
+}
+
+/* صورة السؤال */
+function nafesFigureBox(url){
+  const img = h("img",{src:url, alt:"صورة السؤال", loading:"lazy", onclick:()=>nafesLightbox(url)});
+  return h("div",{class:"q-figure"}, [ img, h("div",{class:"fig-hint"},"اضغط على الصورة لتكبيرها") ]);
+}
+
 const AR_DIGITS = ["٠","١","٢","٣","٤","٥","٦","٧","٨","٩"];
 function nafesAr(n){ return String(n).replace(/[0-9]/g, d => AR_DIGITS[+d]); }
 
@@ -13677,7 +13864,7 @@ async function renderQuiz(subject, mode) {
   /* ترتيب عشوائي للأسئلة وللخيارات: الاختبار لم يعد متطابقاً في كل محاولة */
   questions = nafesShuffle(questions).map(nafesShuffleOptions);
 
-  let idx = 0, correctCount = 0, wrongCount = 0, streak = 0, bestStreak = 0, points = 0, answeredCount = 0;
+  let idx = 0, correctCount = 0, wrongCount = 0, streak = 0, bestStreak = 0, points = 0, answeredCount = 0, skippedCount = 0;
   let answered = false;
   const roundMistakes = [];
 
@@ -13787,6 +13974,7 @@ async function renderQuiz(subject, mode) {
       }
 
       const last = idx === total - 1;
+      actions.innerHTML = "";   /* يزيل زر التخطي إن وُجد */
       const nextBtn = h("button", {class:"btn btn-primary", onclick:goNext},
         last ? "عرض النتيجة النهائية ✨" : "السؤال التالي ←");
       actions.appendChild(nextBtn);
@@ -13807,15 +13995,36 @@ async function renderQuiz(subject, mode) {
       } else advance();
     }
 
+    /* هل ينقص السؤال صورته أو نصه القرائي؟ */
+    const miss = nafesMissingMedia(q);
+    const parts = [ h("div", {class:"q-num"}, `السؤال ${nafesAr(idx+1)} من ${nafesAr(total)}`) ];
+
+    if (String(q.passage || "").trim()) parts.push(nafesPassageBox(q.passage, q.passageTitle));
+    parts.push(h("div", {class:"q-text"}, q.text));
+    if (q.image) parts.push(nafesFigureBox(q.image));
+
+    if (miss.any) {
+      const what = miss.needsImg && miss.needsTxt ? "الشكل ونص القراءة الخاصان"
+                 : miss.needsImg ? "الشكل الخاص" : "نص القراءة الخاص";
+      parts.push(h("div", {class:"q-missing"}, [
+        h("span",{},"⚠"),
+        h("span",{}, `${what} بهذا السؤال غير متوفر في المنصة بعد، وقد لا تتمكن من حلّه. يمكنك تخطّيه — ولن يُحتسب ضمن نتيجتك.`),
+      ]));
+    }
+
+    parts.push(optList, feedbackSlot, actions,
+      h("div", {class:"q-hint"}, "يمكنك استخدام أرقام لوحة المفاتيح ١–٤ للاختيار، ثم Enter للانتقال"));
+
+    if (miss.any) {
+      actions.appendChild(h("button", {class:"btn btn-skip", onclick:()=>{
+        if (answered) return;
+        answered = true; answeredCount++; skippedCount++;
+        refreshHud(); goNext();
+      }}, "تخطّي هذا السؤال ←"));
+    }
+
     stage.innerHTML = "";
-    stage.appendChild(h("div", {class:"q-card"}, [
-      h("div", {class:"q-num"}, `السؤال ${nafesAr(idx+1)} من ${nafesAr(total)}`),
-      h("div", {class:"q-text"}, q.text),
-      optList,
-      feedbackSlot,
-      actions,
-      h("div", {class:"q-hint"}, "يمكنك استخدام أرقام لوحة المفاتيح ١–٤ للاختيار، ثم Enter للانتقال"),
-    ]));
+    stage.appendChild(h("div", {class:"q-card"}, parts));
 
     nafesAttachKeys(ev=>{
       if (ev.key === "Enter") { if (answered) { actions.querySelector("button")?.click(); ev.preventDefault(); } return; }
@@ -13827,7 +14036,8 @@ async function renderQuiz(subject, mode) {
   /* ============================ شاشة النتيجة ============================ */
   function finishQuiz(){
     nafesDetachKeys();
-    const pct = Math.round((correctCount/total)*100);
+    const graded = Math.max(total - skippedCount, 1);   /* الأسئلة المتخطّاة لا تُحتسب */
+    const pct = Math.round((correctCount/graded)*100);
     const prevBest = nafesGetBest(subject);
     const improved = nafesSetBest(subject, pct);
 
@@ -13847,7 +14057,7 @@ async function renderQuiz(subject, mode) {
          <circle class="bg" cx="95" cy="95" r="70"></circle>
          <circle class="fg" cx="95" cy="95" r="70" stroke-dasharray="${C}" stroke-dashoffset="${C}"></circle>
          <text x="95" y="92" text-anchor="middle" font-size="38">٪${nafesAr(pct)}</text>
-         <text x="95" y="121" text-anchor="middle" font-size="17" opacity=".62">${nafesAr(correctCount)} من ${nafesAr(total)}</text>
+         <text x="95" y="121" text-anchor="middle" font-size="17" opacity=".62">${nafesAr(correctCount)} من ${nafesAr(graded)}</text>
        </svg>`;
     const ringFg = ringWrap.querySelector(".fg");
     const ring = ringWrap;
@@ -13887,6 +14097,8 @@ async function renderQuiz(subject, mode) {
           h("div",{class:"rs-box no"},[h("b",{},nafesAr(wrongCount)),   h("small",{},"إجابة خاطئة")]),
           h("div",{class:"rs-box st"},[h("b",{},nafesAr(points)),        h("small",{},"نقطة")]),
         ]),
+        skippedCount ? h("div",{class:"rs-best"},
+          `تخطّيتَ ${nafesAr(skippedCount)} سؤالاً لعدم توفّر الشكل أو النص، ولم تُحتسب ضمن النتيجة.`) : null,
         bestLine,
       ]),
       ...actions,
@@ -14229,7 +14441,9 @@ function openStudentForm(body, student) {
 
 async function loadQuestions(body) {
   const subject = state.params.subject || "science";
+  const mediaFilter = state.params.qfilter || "all";
   body.innerHTML = "";
+
   const subTabs = h("div",{class:"tabs", style:"border-bottom:none;margin-bottom:14px;"},
     Object.entries(SUBJECT_META).map(([key,meta]) =>
       h("button",{class:"tab-btn"+(subject===key?" active":""), onclick:()=>{ state.params.subject=key; loadQuestions(body); }}, `${meta.emoji} ${meta.label}`)
@@ -14237,61 +14451,251 @@ async function loadQuestions(body) {
   );
   body.appendChild(subTabs);
 
+  if (!STORAGE_READY) {
+    body.appendChild(h("div",{class:"storage-warn"},
+      "⚠ خدمة تخزين الصور (Firebase Storage) غير مفعّلة في مشروعك. " +
+      "يمكنك رفع الصور مؤقتاً وستُحفظ مضغوطة داخل قاعدة البيانات (بحد ٤٠٠ كيلوبايت للصورة) — وهذا يعمل لكنه غير مناسب لعدد كبير من الصور. " +
+      "للحل الدائم: فعّل Storage من لوحة Firebase واضبط قواعده كما في الدليل المرفق، ثم أعد تحميل الصفحة."));
+  }
+
   let questions = [];
   try {
     questions = (await getDocs(query(collection(db,"questions"), where("subject","==",subject)))).docs.map(d=>({id:d.id,...d.data()}));
   } catch(e){}
   questions.sort((a,b)=>(a.order||0)-(b.order||0));
 
+  /* حصر الأسئلة التي ينقصها شكل أو نص قرائي */
+  const needImg = questions.filter(q => nafesNeedsFigure(q.text) && !q.image);
+  const needTxt = questions.filter(q => nafesNeedsPassage(q.text) && !String(q.passage||"").trim());
+  const withImg = questions.filter(q => q.image);
+
+  let shown = questions;
+  if (mediaFilter === "needimg") shown = needImg;
+  else if (mediaFilter === "needtxt") shown = needTxt;
+  else if (mediaFilter === "hasimg") shown = withImg;
+
+  function fchip(id,label){
+    return h("button",{class:"mx-filter"+(mediaFilter===id?" active":""),
+      onclick:()=>{ state.params.qfilter=id; loadQuestions(body); }}, label);
+  }
+  body.appendChild(h("div",{style:"font-weight:800;font-size:13px;margin-bottom:9px;"},
+    `أسئلة ${SUBJECT_META[subject].label} (${questions.length})`));
+  body.appendChild(h("div",{class:"qa-filters"},[
+    fchip("all", `الكل (${questions.length})`),
+    fchip("needimg", `⚠ تحتاج صورة (${needImg.length})`),
+    fchip("needtxt", `⚠ تحتاج نص قراءة (${needTxt.length})`),
+    fchip("hasimg", `🖼 لها صورة (${withImg.length})`),
+  ]));
+
+  if (mediaFilter === "needimg" && needImg.length) {
+    body.appendChild(h("div",{class:"storage-warn", style:"background:var(--amber-light);color:var(--amber);border-color:rgba(185,109,23,.3);"},
+      "هذه الأسئلة يذكر نصها شكلاً أو صورة أو جدولاً، لكن لا صورة مرفقة بها. اضغط «تعديل» بجانب السؤال لرفع صورته. " +
+      "حتى ذلك الحين يراها الطالب مع تنبيه ويستطيع تخطّيها دون أن تُحتسب عليه."));
+  }
+  if (mediaFilter === "needtxt" && needTxt.length) {
+    body.appendChild(h("div",{class:"storage-warn", style:"background:var(--amber-light);color:var(--amber);border-color:rgba(185,109,23,.3);"},
+      "هذه الأسئلة تشير إلى نص قرائي غير موجود. اضغط «تعديل» والصق نص القراءة في حقل «نص القراءة»، " +
+      "وكرّره في كل سؤال يتبع النص نفسه."));
+  }
+
   const table = h("table",{class:"mock"});
-  table.appendChild(h("tr",{},[h("th",{},"السؤال"),h("th",{},"الخيارات الأربعة (الصحيح باللون الأخضر)"),h("th",{},"إجراءات")]));
-  questions.forEach(q=>{
-    const delBtn = h("a",{style:"color:var(--red);", onclick: async ()=>{
+  table.appendChild(h("tr",{},[
+    h("th",{},"#"), h("th",{},"السؤال"), h("th",{},"الوسائط"),
+    h("th",{},"الخيارات الأربعة (الصحيح باللون الأخضر)"), h("th",{},"إجراءات"),
+  ]));
+
+  shown.forEach((q,i)=>{
+    const miss = nafesMissingMedia(q);
+
+    const editBtn = h("a",{style:"color:var(--blue);cursor:pointer;margin-left:10px;",
+      onclick:()=>openQuestionForm(body, subject, questions, q)}, "تعديل");
+    const delBtn = h("a",{style:"color:var(--red);cursor:pointer;", onclick: async ()=>{
       if (!confirm("حذف هذا السؤال؟")) return;
+      if (q.imagePath) await nafesDeleteImage(q.imagePath);
       await deleteDoc(doc(db,"questions",q.id));
       loadQuestions(body);
     }}, "حذف");
+
+    let mediaCell;
+    if (q.image) {
+      mediaCell = h("div",{class:"qa-media ok"},[
+        h("img",{class:"qa-thumb", src:q.image, alt:"", loading:"lazy",
+          style:"cursor:zoom-in;", onclick:()=>nafesLightbox(q.image)}),
+      ]);
+    } else if (miss.needsImg) {
+      mediaCell = h("div",{class:"qa-media warn"},"⚠ ينقصه شكل");
+    } else if (miss.needsTxt) {
+      mediaCell = h("div",{class:"qa-media warn"},"⚠ ينقصه نص");
+    } else if (String(q.passage||"").trim()) {
+      mediaCell = h("div",{class:"qa-media ok"},"📖 له نص");
+    } else {
+      mediaCell = h("div",{class:"qa-media none"},"—");
+    }
+
     let optsCell;
     if (Array.isArray(q.options) && q.options.length === 4) {
       optsCell = h("div",{style:"display:flex;flex-direction:column;gap:2px;font-size:11.5px;"},
-        q.options.map((opt,i)=> h("div",{style: i===q.correctIndex ? "color:var(--teal);font-weight:700;" : "color:var(--sub);"}, `${["أ","ب","ج","د"][i]}) ${opt}`))
+        q.options.map((opt,oi)=> h("div",{style: oi===q.correctIndex ? "color:var(--teal);font-weight:700;" : "color:var(--sub);"}, `${["أ","ب","ج","د"][oi]}) ${opt}`))
       );
     } else {
       optsCell = h("div",{style:"color:var(--red);font-size:11.5px;"}, "⚠ لا توجد 4 خيارات صالحة لهذا السؤال");
     }
-    table.appendChild(h("tr",{},[ h("td",{},q.text), h("td",{},[optsCell]), h("td",{},[delBtn]) ]));
-  });
-  body.appendChild(h("div",{style:"font-weight:700;font-size:13px;margin-bottom:10px;"}, `أسئلة ${SUBJECT_META[subject].label} (${questions.length})`));
-  body.appendChild(table);
 
-  // نموذج إضافة سؤال
-  const qText = h("input",{placeholder:"نص السؤال"});
-  const opt0 = h("input",{placeholder:"الخيار 1"}), opt1 = h("input",{placeholder:"الخيار 2"});
-  const opt2 = h("input",{placeholder:"الخيار 3"}), opt3 = h("input",{placeholder:"الخيار 4"});
+    table.appendChild(h("tr",{},[
+      h("td",{style:"color:var(--sub);font-size:11.5px;"}, String(q.order || i+1)),
+      h("td",{},q.text),
+      h("td",{},[mediaCell]),
+      h("td",{},[optsCell]),
+      h("td",{},[editBtn, delBtn]),
+    ]));
+  });
+
+  if (!shown.length) {
+    body.appendChild(h("div",{class:"empty"}, "لا توجد أسئلة ضمن هذا التصنيف 🎉"));
+  } else {
+    body.appendChild(table);
+  }
+
+  body.appendChild(h("button",{class:"btn btn-primary btn-sm", style:"margin-top:14px;",
+    onclick:()=>openQuestionForm(body, subject, questions, null)}, "＋ إضافة سؤال جديد"));
+}
+
+/* نموذج إضافة/تعديل سؤال — يشمل الصورة ونص القراءة */
+function openQuestionForm(body, subject, questions, existing) {
+  const isEdit = !!existing;
+  const q = existing || {};
+
+  const qText = h("textarea",{rows:"2", placeholder:"نص السؤال"}); qText.value = q.text || "";
+  const opts = [0,1,2,3].map(i=>{
+    const el = h("input",{placeholder:`الخيار ${i+1}`});
+    el.value = (q.options && q.options[i]) || "";
+    return el;
+  });
   const correctSel = h("select",{}, [0,1,2,3].map(i=>h("option",{value:i}, `الخيار ${i+1}`)));
+  correctSel.value = String(q.correctIndex ?? 0);
+
+  const passageTitle = h("input",{placeholder:"اسم النص (اختياري) — مثال: نص القهوة"});
+  passageTitle.value = q.passageTitle || "";
+  const passage = h("textarea",{rows:"5", placeholder:"الصق هنا نص القراءة كاملاً إن كان السؤال يعتمد عليه"});
+  passage.value = q.passage || "";
+
   const msg = h("div",{class:"msg"});
-  body.appendChild(h("div",{class:"modal-mini"},[
-    h("div",{style:"font-weight:700;font-size:12.5px;margin-bottom:8px;"}, "إضافة سؤال جديد"),
+
+  /* ——— الصورة ——— */
+  let imageUrl = q.image || "", imagePath = q.imagePath || "";
+  const preview = h("img",{class:"upload-preview", alt:"معاينة صورة السؤال"});
+  const previewBox = h("div",{});
+  const fileInput = h("input",{type:"file", accept:"image/*", style:"display:none;"});
+  const uploadStatus = h("div",{style:"font-size:12px;font-weight:800;margin-top:8px;"});
+
+  function paintPreview(){
+    previewBox.innerHTML = "";
+    if (!imageUrl) return;
+    preview.src = imageUrl;
+    previewBox.appendChild(preview);
+    previewBox.appendChild(h("div",{style:"margin-top:8px;"},[
+      h("button",{class:"btn btn-outline btn-sm", type:"button", onclick:()=>{
+        if (!confirm("إزالة صورة هذا السؤال؟")) return;
+        imageUrl = ""; /* الملف نفسه يُحذف من التخزين عند الحفظ */
+        paintPreview();
+      }}, "إزالة الصورة"),
+    ]));
+  }
+  const oldImagePath = q.imagePath || "";
+
+  fileInput.addEventListener("change", async ()=>{
+    const file = fileInput.files && fileInput.files[0];
+    if (!file) return;
+    uploadStatus.style.color = "var(--sub)";
+    uploadStatus.textContent = "جارٍ ضغط الصورة ورفعها...";
+    try {
+      const res = await nafesUploadQuestionImage(file, subject);
+      imageUrl = res.url; imagePath = res.path;
+      uploadStatus.style.color = "var(--teal)";
+      uploadStatus.textContent = res.inline
+        ? `تم الحفظ ✓ (${Math.round(res.size/1024)} كيلوبايت — مخزّنة داخل قاعدة البيانات لأن خدمة Storage غير مفعّلة)`
+        : `تم الرفع ✓ (${Math.round(res.size/1024)} كيلوبايت بعد الضغط)`;
+      paintPreview();
+    } catch(e) {
+      uploadStatus.style.color = "var(--red)";
+      uploadStatus.textContent = "تعذّر رفع الصورة: " + (e && e.message ? e.message : e);
+    }
+    fileInput.value = "";
+  });
+
+  const hintImg = nafesNeedsFigure(qText.value) ? "⚠ نص هذا السؤال يشير إلى شكل/صورة — يُنصح بإرفاق صورته." : "";
+  const hintTxt = nafesNeedsPassage(qText.value) ? "⚠ نص هذا السؤال يشير إلى نص قرائي — الصقه في الحقل أدناه." : "";
+
+  const form = h("div",{class:"modal-mini", style:"margin-top:16px;"},[
+    h("div",{style:"font-weight:800;font-size:13.5px;margin-bottom:10px;"},
+      isEdit ? `تعديل السؤال رقم ${q.order || ""}` : "إضافة سؤال جديد"),
+
     h("div",{class:"field"},[h("label",{},"نص السؤال"), qText]),
+    hintImg ? h("div",{style:"color:var(--amber);font-size:12px;font-weight:800;margin-bottom:8px;"}, hintImg) : null,
+
     h("div",{class:"row"},[
-      h("div",{class:"field col"},[h("label",{},"الخيار 1"), opt0]),
-      h("div",{class:"field col"},[h("label",{},"الخيار 2"), opt1]),
+      h("div",{class:"field col"},[h("label",{},"الخيار 1"), opts[0]]),
+      h("div",{class:"field col"},[h("label",{},"الخيار 2"), opts[1]]),
     ]),
     h("div",{class:"row"},[
-      h("div",{class:"field col"},[h("label",{},"الخيار 3"), opt2]),
-      h("div",{class:"field col"},[h("label",{},"الخيار 4"), opt3]),
+      h("div",{class:"field col"},[h("label",{},"الخيار 3"), opts[2]]),
+      h("div",{class:"field col"},[h("label",{},"الخيار 4"), opts[3]]),
     ]),
     h("div",{class:"field"},[h("label",{},"الإجابة الصحيحة"), correctSel]),
+
+    h("div",{class:"field"},[
+      h("label",{},"صورة السؤال (الشكل / الجدول / الرسم)"),
+      h("div",{class:"upload-box"},[
+        h("div",{},"اختر صورة من جهازك — تُضغط تلقائياً قبل الرفع لتسريع فتحها على جوالات الطلاب."),
+        h("button",{class:"btn btn-outline btn-sm", type:"button", style:"margin-top:9px;",
+          onclick:()=>fileInput.click()}, "📷 اختيار صورة"),
+        fileInput, uploadStatus, previewBox,
+      ]),
+    ]),
+
+    h("div",{class:"field"},[h("label",{},"اسم نص القراءة (اختياري)"), passageTitle]),
+    h("div",{class:"field"},[h("label",{},"نص القراءة (للغتي)"), passage]),
+    hintTxt ? h("div",{style:"color:var(--amber);font-size:12px;font-weight:800;margin-bottom:8px;"}, hintTxt) : null,
+
     msg,
-    h("button",{class:"btn btn-primary btn-sm", onclick: async ()=>{
-      const options = [opt0.value.trim(),opt1.value.trim(),opt2.value.trim(),opt3.value.trim()];
-      if (!qText.value.trim() || options.some(o=>!o)) { msg.className="msg err"; msg.textContent="أكمل نص السؤال والخيارات الأربعة."; return; }
-      await addDoc(collection(db,"questions"), {
-        subject, text:qText.value.trim(), options, correctIndex:Number(correctSel.value), order: questions.length+1,
-      });
-      loadQuestions(body);
-    }}, "إضافة السؤال"),
-  ]));
+    h("div",{style:"display:flex;gap:8px;flex-wrap:wrap;"},[
+      h("button",{class:"btn btn-primary btn-sm", onclick: async ()=>{
+        const options = opts.map(o=>o.value.trim());
+        if (!qText.value.trim() || options.some(o=>!o)) {
+          msg.className="msg err"; msg.textContent="أكمل نص السؤال والخيارات الأربعة."; return;
+        }
+        msg.className="msg"; msg.textContent="جارٍ الحفظ...";
+        const payload = {
+          subject,
+          text: qText.value.trim(),
+          options,
+          correctIndex: Number(correctSel.value),
+          image: imageUrl || null,
+          imagePath: imageUrl ? (imagePath || null) : null,
+          passage: passage.value.trim() || null,
+          passageTitle: passageTitle.value.trim() || null,
+        };
+        try {
+          if (isEdit) {
+            await updateDoc(doc(db,"questions", q.id), payload);
+            /* حذف الصورة القديمة إن استُبدلت أو أُزيلت */
+            if (oldImagePath && oldImagePath !== payload.imagePath) await nafesDeleteImage(oldImagePath);
+          } else {
+            payload.order = questions.length + 1;
+            await addDoc(collection(db,"questions"), payload);
+          }
+          loadQuestions(body);
+        } catch(e) {
+          msg.className="msg err"; msg.textContent="تعذّر الحفظ: " + (e && e.message ? e.message : e);
+        }
+      }}, isEdit ? "حفظ التعديلات" : "إضافة السؤال"),
+      h("button",{class:"btn btn-outline btn-sm", onclick:()=>loadQuestions(body)}, "إلغاء"),
+    ]),
+  ]);
+
+  paintPreview();
+  body.appendChild(form);
+  form.scrollIntoView({behavior:"smooth", block:"center"});
 }
 
 async function clearStudentMistakes(studentId, studentName, body) {
@@ -14403,6 +14807,18 @@ async function boot() {
        query, where, orderBy, increment, writeBatch, limit, onSnapshot } = firestoreMod);
     const app = initializeApp(firebaseConfig);
     db = firestoreMod.getFirestore(app);
+
+    /* تحميل خدمة تخزين الصور (اختيارية): فشلها لا يوقف المنصة */
+    try {
+      const st = await import("https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js");
+      ({ ref: sRef, uploadBytes, getDownloadURL, deleteObject } = st);
+      storage = st.getStorage(app);
+      STORAGE_READY = true;
+    } catch (e) {
+      STORAGE_READY = false;
+      STORAGE_ERROR = String(e && e.message || e);
+      console.warn("تعذّر تحميل خدمة تخزين الصور", e);
+    }
   } catch (err) {
     renderLoadError(err);
     return;
