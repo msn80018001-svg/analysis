@@ -14230,7 +14230,7 @@ function renderAdminDash() {
 
   const tabs = h("div", {class:"tabs"}, [
     tabBtn("overview","نظرة عامة"), tabBtn("roster","إدارة الطلاب"),
-    tabBtn("questions","بنك الأسئلة"), tabBtn("reports","تقارير الأداء"),
+    tabBtn("questions","بنك الأسئلة"), tabBtn("media","استيراد الوسائط"), tabBtn("reports","تقارير الأداء"),
   ]);
   function tabBtn(id,label){ return h("button",{class:"tab-btn"+(tab===id?" active":""), onclick:()=>nav("admin-dash",{tab:id})}, label); }
 
@@ -14240,6 +14240,7 @@ function renderAdminDash() {
   if (tab === "overview") loadOverview(body);
   else if (tab === "roster") loadRoster(body);
   else if (tab === "questions") loadQuestions(body);
+  else if (tab === "media") openMediaImport(body);
   else if (tab === "reports") loadReports(body);
 }
 
@@ -14437,6 +14438,155 @@ function openStudentForm(body, student) {
   ]);
   // ضع النموذج في أعلى الجدول
   body.insertBefore(form, body.firstChild.nextSibling ? body.children[1] : null);
+}
+
+/* ============================================================================
+   V12 — استيراد وسائط الأسئلة (صور ونصوص) من ملف JSON مُعدّ مسبقاً
+   ========================================================================== */
+
+function nafesNormText(t){
+  t = String(t || "");
+  t = t.replace(/[ً-ْـ]/g,"");
+  t = t.replace(/[أإآ]/g,"ا").replace(/ى/g,"ي").replace(/ة/g,"ه").replace(/ؤ/g,"و").replace(/ئ/g,"ي");
+  return t.replace(/[^ء-ي0-9]/g,"");
+}
+
+/* يحوّل data URI إلى Blob لرفعه إلى Storage */
+function nafesDataUrlToBlob(dataUrl){
+  const [head, b64] = String(dataUrl).split(",");
+  const mime = (head.match(/data:([^;]+)/) || [,"image/jpeg"])[1];
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) arr[i] = bin.charCodeAt(i);
+  return new Blob([arr], {type:mime});
+}
+
+async function openMediaImport(body){
+  body.innerHTML = "";
+  const fileInput = h("input",{type:"file", accept:"application/json,.json", style:"display:none;"});
+  const status = h("div",{class:"msg"});
+  const report = h("div",{});
+  let parsed = null, plan = null;
+
+  body.appendChild(h("div",{class:"modal-mini"},[
+    h("div",{style:"font-weight:800;font-size:14px;margin-bottom:8px;"},"استيراد وسائط الأسئلة"),
+    h("p",{style:"font-size:12.5px;color:var(--sub);line-height:1.9;margin:0 0 12px;"},
+      "اختر ملف «وسائط-الأسئلة.json». ستُعرض عليك خطة المطابقة أولاً، ولن يُعدَّل أي سؤال قبل أن تضغط «تنفيذ الاستيراد»."),
+    h("div",{class:"upload-box"},[
+      h("button",{class:"btn btn-outline btn-sm", type:"button", onclick:()=>fileInput.click()},"📂 اختيار ملف الوسائط"),
+      fileInput,
+    ]),
+    status, report,
+  ]));
+
+  fileInput.addEventListener("change", async ()=>{
+    const f = fileInput.files && fileInput.files[0];
+    if (!f) return;
+    status.className = "msg"; status.textContent = "جارٍ قراءة الملف ومطابقته مع أسئلة المنصة...";
+    report.innerHTML = "";
+    try {
+      parsed = JSON.parse(await f.text());
+    } catch(e){ status.className="msg err"; status.textContent="الملف ليس JSON صالحاً."; return; }
+    if (!parsed || !Array.isArray(parsed.patches)) {
+      status.className="msg err"; status.textContent="بنية الملف غير متوقعة (لا يحتوي على patches)."; return;
+    }
+
+    /* تحميل أسئلة المواد المعنية مرة واحدة */
+    const subjects = [...new Set(parsed.patches.map(p=>p.subject))];
+    const bySubject = {};
+    for (const sub of subjects) {
+      try {
+        const snap = await getDocs(query(collection(db,"questions"), where("subject","==",sub)));
+        bySubject[sub] = snap.docs.map(d=>({id:d.id, ...d.data(), _n:nafesNormText(d.data().text)}));
+      } catch(e){ bySubject[sub] = []; }
+    }
+
+    plan = { matched:[], missing:[], already:[] };
+    parsed.patches.forEach(p=>{
+      const pool = bySubject[p.subject] || [];
+      const key = nafesNormText(p.matchText);
+      let hit = pool.find(q=>q._n === key);
+      if (!hit) hit = pool.find(q=>q._n.startsWith(key.slice(0,60)) && key.length>60);
+      if (!hit) { plan.missing.push(p); return; }
+      const hasImg = p.image && hit.image;
+      const hasTxt = p.passage && String(hit.passage||"").trim();
+      if ((p.image && hasImg) || (p.passage && hasTxt)) plan.already.push({p,hit});
+      else plan.matched.push({p,hit});
+    });
+
+    const nImg = plan.matched.filter(m=>m.p.image).length;
+    const nTxt = plan.matched.filter(m=>m.p.passage).length;
+    status.className = "msg ok"; status.textContent = "تمت المطابقة. راجع الخطة ثم نفّذ.";
+
+    report.innerHTML = "";
+    report.appendChild(h("div",{class:"hub-stats", style:"margin:14px 0;"},[
+      h("div",{class:"hub-stat"},[h("div",{class:"hs-val"},String(nImg)), h("div",{class:"hs-lbl"},"صورة ستُضاف")]),
+      h("div",{class:"hub-stat"},[h("div",{class:"hs-val"},String(nTxt)), h("div",{class:"hs-lbl"},"نص سيُضاف")]),
+      h("div",{class:"hub-stat"},[h("div",{class:"hs-val"},String(plan.missing.length)), h("div",{class:"hs-lbl"},"لم يُعثر عليه")]),
+    ]));
+    if (plan.already.length) {
+      report.appendChild(h("div",{style:"font-size:12.5px;color:var(--sub);font-weight:700;margin-bottom:10px;"},
+        `${plan.already.length} سؤالاً لديه وسائط بالفعل — سيُترك كما هو دون تغيير.`));
+    }
+
+    /* جدول مراجعة مختصر */
+    const tbl = h("table",{class:"mock"});
+    tbl.appendChild(h("tr",{},[h("th",{},"المادة"),h("th",{},"السؤال في المنصة"),h("th",{},"سيُضاف")]));
+    plan.matched.slice(0,60).forEach(({p,hit})=>{
+      tbl.appendChild(h("tr",{},[
+        h("td",{}, SUBJECT_META[p.subject]?.label || p.subject),
+        h("td",{}, hit.text.slice(0,110)),
+        h("td",{}, p.image
+          ? h("img",{src:p.image, class:"qa-thumb", style:"cursor:zoom-in;", onclick:()=>nafesLightbox(p.image)})
+          : h("span",{style:"font-size:11.5px;color:var(--teal);font-weight:800;"}, "📖 " + (p.passageTitle||"نص"))),
+      ]));
+    });
+    report.appendChild(tbl);
+    if (plan.matched.length>60) report.appendChild(h("div",{style:"font-size:12px;color:var(--sub);margin-top:8px;"},
+      `… وعدد ${plan.matched.length-60} عنصراً آخر غير معروض هنا.`));
+
+    if (plan.missing.length) {
+      const det = h("details",{style:"margin-top:12px;"});
+      det.appendChild(h("summary",{style:"cursor:pointer;font-weight:800;font-size:12.5px;color:var(--amber);"},
+        `عناصر لم يُعثر على سؤالها في المنصة (${plan.missing.length}) — اضغط للعرض`));
+      plan.missing.slice(0,40).forEach(p=>det.appendChild(
+        h("div",{style:"font-size:11.5px;color:var(--sub);padding:4px 0;"}, p.matchText.slice(0,120))));
+      report.appendChild(det);
+    }
+
+    const prog = h("div",{style:"font-size:13px;font-weight:800;margin-top:12px;"});
+    const runBtn = h("button",{class:"btn btn-primary btn-block", style:"margin-top:14px;", onclick: async ()=>{
+      runBtn.disabled = true;
+      let done=0, failed=0;
+      for (const {p,hit} of plan.matched) {
+        const payload = {};
+        try {
+          if (p.image) {
+            if (STORAGE_READY) {
+              const blob = nafesDataUrlToBlob(p.image);
+              const path = `questions/${p.subject}/import_${hit.id}.jpg`;
+              const r = sRef(storage, path);
+              await uploadBytes(r, blob, {contentType:"image/jpeg", cacheControl:"public,max-age=31536000"});
+              payload.image = await getDownloadURL(r);
+              payload.imagePath = path;
+            } else {
+              payload.image = p.image;      /* تخزين داخل المستند عند غياب Storage */
+              payload.imagePath = null;
+            }
+          }
+          if (p.passage) { payload.passage = p.passage; payload.passageTitle = p.passageTitle || null; }
+          await updateDoc(doc(db,"questions", hit.id), payload);
+          done++;
+        } catch(e) { failed++; console.warn("فشل ترقيع سؤال", hit.id, e); }
+        prog.textContent = `تم ${done} من ${plan.matched.length}${failed?` — فشل ${failed}`:""}`;
+      }
+      prog.style.color = failed ? "var(--amber)" : "var(--teal)";
+      prog.textContent = `اكتمل الاستيراد: ${done} سؤالاً حُدِّث${failed?`، وفشل ${failed}`:""}.`;
+      runBtn.textContent = "تم ✓";
+    }}, `تنفيذ الاستيراد على ${plan.matched.length} سؤالاً`);
+
+    if (plan.matched.length) { report.appendChild(runBtn); report.appendChild(prog); }
+  });
 }
 
 async function loadQuestions(body) {
